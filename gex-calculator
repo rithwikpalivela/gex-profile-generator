@@ -1,0 +1,78 @@
+import robin_stocks as rs
+import os
+from datetime import datetime
+import pandas as pd
+import matplotlib.pyplot as plt
+
+rh_user = os.environ.get("rh_username")
+rh_pass = os.environ.get("rh_password")
+
+rs.robinhood.authentication.login(username=rh_user, password=rh_pass, expiresIn=86400, by_sms=True)
+
+ticker = input("Enter a ticker: ")
+spot_price = float(rs.robinhood.stocks.get_latest_price(ticker)[0])
+print(spot_price)
+
+options = []
+for option in rs.robinhood.options.find_tradable_options(ticker):
+    if not options or float(option['strike_price']) != options[-1]['strike'] or option['expiration_date'] != options[-1]['expiry']:
+        options.append({'strike': float(option['strike_price']), 'expiry': option['expiration_date']})
+
+options.sort(key=lambda option: (option['expiry'], option['strike']))
+
+curr_exp = options[0]['expiry']
+
+total_call_gex = 0
+total_put_gex = 0
+ppg = None
+png = None
+call_gex_by_strike_and_exp = {}
+put_gex_by_strike_and_exp = {}
+
+for option in options:
+    if option['expiry'] != curr_exp:
+        break
+
+    call = rs.robinhood.options.find_options_by_expiration_and_strike(ticker, option['expiry'], option['strike'], 'call')[0]
+    put = rs.robinhood.options.find_options_by_expiration_and_strike(ticker, option['expiry'], option['strike'], 'put')[0]
+    
+    if 'gamma' in call and call['gamma']:
+        spot_gex_call = float(call['gamma']) * float(call['open_interest'])
+
+        if not ppg or spot_gex_call > call_gex_by_strike_and_exp[ppg]:
+            ppg = option['strike']
+        
+        call_gex_by_strike_and_exp[option['strike']] = spot_gex_call
+        total_call_gex += spot_gex_call
+
+    if 'gamma' in put and put['gamma']:
+        spot_gex_put = -float(put['gamma']) * float(put['open_interest'])
+
+        if not png or spot_gex_put < put_gex_by_strike_and_exp[png]:
+            png = option['strike']
+
+        put_gex_by_strike_and_exp[option['strike']] = spot_gex_put
+        total_put_gex += spot_gex_put
+
+# for spot in call_gex_by_strike_and_exp:
+#     call_gex_by_strike_and_exp[spot] = call_gex_by_strike_and_exp[spot] / (total_call_gex - total_put_gex)
+# for spot in put_gex_by_strike_and_exp:
+#     put_gex_by_strike_and_exp[spot] = put_gex_by_strike_and_exp[spot] / (total_call_gex - total_put_gex)
+
+print("PPG: ", ppg, call_gex_by_strike_and_exp[ppg])
+print("PNG: ", png, put_gex_by_strike_and_exp[png])
+print("POS GEX: ", 100 * total_call_gex / (total_call_gex - total_put_gex))
+print("NEG GEX: ", 100 * total_put_gex / (total_call_gex - total_put_gex))
+
+call_gex_df = pd.DataFrame(call_gex_by_strike_and_exp.items(), columns=['Strike', 'GEX'])
+put_gex_df = pd.DataFrame(put_gex_by_strike_and_exp.items(), columns=['Strike', 'GEX'])
+
+ax = call_gex_df.plot(x='Strike', y='GEX', color='green', label='POS GEX: ' + str(round(100 * total_call_gex / (total_call_gex - total_put_gex))) + '%')
+put_gex_df.plot(ax=ax, x='Strike', y='GEX', color='red', label='NEG GEX: ' + str(round(100 * total_put_gex / (total_call_gex - total_put_gex))) + '%')
+
+plt.plot(ppg, call_gex_by_strike_and_exp[ppg], '*', markersize=12, color='green', label='PPG: ' + str(ppg))
+plt.plot(png, put_gex_by_strike_and_exp[png], '*', markersize=12, color='red', label='PNG: ' + str(png))
+plt.axvline(x = spot_price, color='black', linestyle='--', label='Current Price: ' + str(round(spot_price, 2)))
+
+plt.legend()
+plt.show()
