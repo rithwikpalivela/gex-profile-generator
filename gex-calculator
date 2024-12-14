@@ -1,6 +1,6 @@
 import robin_stocks as rs
 import os
-from datetime import datetime
+import datetime
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -14,13 +14,14 @@ spot_price = float(rs.robinhood.stocks.get_latest_price(ticker)[0])
 print(spot_price)
 
 options = []
+expirations = []
+
 for option in rs.robinhood.options.find_tradable_options(ticker):
-    if not options or float(option['strike_price']) != options[-1]['strike'] or option['expiration_date'] != options[-1]['expiry']:
-        options.append({'strike': float(option['strike_price']), 'expiry': option['expiration_date']})
+    if option['expiration_date'] not in expirations:
+        expirations.append(option['expiration_date'])
 
-options.sort(key=lambda option: (option['expiry'], option['strike']))
-
-curr_exp = options[0]['expiry']
+expirations.sort()
+curr_exp = expirations[int(input("Enter an expiration: "))]
 
 total_call_gex = 0
 total_put_gex = 0
@@ -29,43 +30,28 @@ png = None
 call_gex_by_strike_and_exp = {}
 put_gex_by_strike_and_exp = {}
 
+options = rs.robinhood.options.find_options_by_expiration(ticker, curr_exp)
 for option in options:
-    if option['expiry'] != curr_exp:
-        break
+    if 'gamma' in option and option['gamma']:
+        spot_gex = float(option['gamma']) * float(option['open_interest'])
 
-    call = rs.robinhood.options.find_options_by_expiration_and_strike(ticker, option['expiry'], option['strike'], 'call')[0]
-    put = rs.robinhood.options.find_options_by_expiration_and_strike(ticker, option['expiry'], option['strike'], 'put')[0]
+    strike = float(option['strike_price'])
     
-    if 'gamma' in call and call['gamma']:
-        spot_gex_call = float(call['gamma']) * float(call['open_interest'])
-
-        if not ppg or spot_gex_call > call_gex_by_strike_and_exp[ppg]:
-            ppg = option['strike']
+    if option['type'] == 'call':
+        if not ppg or spot_gex > call_gex_by_strike_and_exp[ppg]:
+            ppg = strike
         
-        call_gex_by_strike_and_exp[option['strike']] = spot_gex_call
-        total_call_gex += spot_gex_call
+        call_gex_by_strike_and_exp[strike] = spot_gex
+        total_call_gex += spot_gex
+    elif option['type'] == 'put':
+        if not png or -spot_gex < put_gex_by_strike_and_exp[png]:
+            png = strike
 
-    if 'gamma' in put and put['gamma']:
-        spot_gex_put = -float(put['gamma']) * float(put['open_interest'])
+        put_gex_by_strike_and_exp[strike] = -spot_gex
+        total_put_gex -= spot_gex
 
-        if not png or spot_gex_put < put_gex_by_strike_and_exp[png]:
-            png = option['strike']
-
-        put_gex_by_strike_and_exp[option['strike']] = spot_gex_put
-        total_put_gex += spot_gex_put
-
-# for spot in call_gex_by_strike_and_exp:
-#     call_gex_by_strike_and_exp[spot] = call_gex_by_strike_and_exp[spot] / (total_call_gex - total_put_gex)
-# for spot in put_gex_by_strike_and_exp:
-#     put_gex_by_strike_and_exp[spot] = put_gex_by_strike_and_exp[spot] / (total_call_gex - total_put_gex)
-
-print("PPG: ", ppg, call_gex_by_strike_and_exp[ppg])
-print("PNG: ", png, put_gex_by_strike_and_exp[png])
-print("POS GEX: ", 100 * total_call_gex / (total_call_gex - total_put_gex))
-print("NEG GEX: ", 100 * total_put_gex / (total_call_gex - total_put_gex))
-
-call_gex_df = pd.DataFrame(call_gex_by_strike_and_exp.items(), columns=['Strike', 'GEX'])
-put_gex_df = pd.DataFrame(put_gex_by_strike_and_exp.items(), columns=['Strike', 'GEX'])
+call_gex_df = pd.DataFrame(call_gex_by_strike_and_exp.items(), columns=['Strike', 'GEX']).sort_values(by='Strike')
+put_gex_df = pd.DataFrame(put_gex_by_strike_and_exp.items(), columns=['Strike', 'GEX']).sort_values(by='Strike')
 
 ax = call_gex_df.plot(x='Strike', y='GEX', color='green', label='POS GEX: ' + str(round(100 * total_call_gex / (total_call_gex - total_put_gex))) + '%')
 put_gex_df.plot(ax=ax, x='Strike', y='GEX', color='red', label='NEG GEX: ' + str(round(100 * total_put_gex / (total_call_gex - total_put_gex))) + '%')
