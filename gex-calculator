@@ -10,7 +10,6 @@ rs.robinhood.authentication.login(username=rh_user, password=rh_pass, expiresIn=
 
 ticker = input("Enter a ticker: ")
 spot_price = float(rs.robinhood.stocks.get_latest_price(ticker)[0])
-print(spot_price)
 
 options = []
 expirations = []
